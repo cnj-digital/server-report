@@ -2,7 +2,7 @@
 
 Hardware health checks for our Hetzner servers. Alerts go to Slack **#notifications** via [healthchecks.io](https://healthchecks.io).
 
-Every 15 minutes each server runs `server-report` from cron and sends a report to healthchecks.io:
+Every hour each server runs `server-report` from cron and sends a report to healthchecks.io:
 
 - no problems → **OK** ping
 - any problem → **FAIL** ping, with the details in the body
