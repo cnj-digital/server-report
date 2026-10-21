@@ -5,5 +5,5 @@ set -e
 curl -fsSL https://raw.githubusercontent.com/cnj-digital/server-report/main/server-report -o /usr/local/bin/server-report
 chmod 755 /usr/local/bin/server-report
 echo "$1" > /etc/server-report.key
-echo '*/15 * * * * root /usr/local/bin/server-report' > /etc/cron.d/server-report
+echo '0 * * * * root /usr/local/bin/server-report' > /etc/cron.d/server-report
 /usr/local/bin/server-report && echo ok
