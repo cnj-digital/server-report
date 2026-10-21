@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Health report to healthchecks.io: OK → ping, problems → /fail (body = details).
+# healthchecks.io posts to Slack on state change and when a server stops reporting.
+URL="https://hc-ping.com/$(cat /etc/server-report.key)/$(hostname -s | tr 'A-Z' 'a-z')"
+EDAC=/sys/devices/system/edac/mc
+problems=() info=()
+
+command -v smartctl >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends smartmontools >/dev/null 2>&1
+command -v smartctl >/dev/null || problems+=("smartctl missing, disk health not checked")
+
+for md in $(awk '/^md/{m=$1} /\[[U_]*_[U_]*\]/{print m}' /proc/mdstat 2>/dev/null); do
+  problems+=("RAID $md degraded (a disk is missing)")
+done
+
+for d in $(lsblk -dn -o NAME,TYPE | awk '$2=="disk"{print $1}'); do
+  out=$(smartctl -H -A "/dev/$d" 2>/dev/null); rc=$?
+  (( rc & 24 )) && problems+=("$d SMART failing")
+  wear=$(awk -F: '/Percentage Used/{print $2+0}' <<<"$out")
+  errs=$(awk -F: '/Media and Data Integrity Errors/{gsub(/[ ,]/,"",$2); print $2+0}' <<<"$out")
+  temp=$(awk -F: '/^Temperature:/{print $2+0}' <<<"$out")
+  [ "${wear:-0}" -ge 90 ] && problems+=("$d wear ${wear}%")
+  [ "${errs:-0}" -gt 0 ] && problems+=("$d has $errs media errors")
+  info+=("$d $(lsblk -dn -o MODEL,SERIAL "/dev/$d" | xargs) wear=${wear:-?}% temp=${temp:-?}C media_errors=${errs:-?}")
+done
+
+while read -r use mnt; do
+  [ "${use%\%}" -ge 90 ] && problems+=("filesystem $mnt is $use full")
+done < <(df -P -x tmpfs -x devtmpfs -x squashfs -x overlay | awk 'NR>1{print $5, $6}')
+
+# ponytail: corrected-error threshold of 10 since boot is a guess, tune if noisy
+if [ -e "$EDAC/mc0" ]; then
+  ce=$(cat "$EDAC"/mc*/ce_count | awk '{s+=$1} END{print s+0}')
+  ue=$(cat "$EDAC"/mc*/ue_count | awk '{s+=$1} END{print s+0}')
+  [ "$ue" -gt 0 ] && problems+=("RAM: $ue uncorrectable ECC errors")
+  [ "$ce" -ge 10 ] && problems+=("RAM: $ce corrected ECC errors since boot")
+  info+=("ecc=yes corrected=$ce uncorrectable=$ue")
+else
+  info+=("ecc=not reported")
+fi
+
+body=$(printf '%s\n' "${problems[@]}" "---" "${info[@]}")
+[ ${#problems[@]} -gt 0 ] && URL="$URL/fail"
+curl -fsS -m 15 --retry 3 -o /dev/null --data-raw "$body" "$URL?create=1"
